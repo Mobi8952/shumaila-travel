@@ -19,7 +19,7 @@ const validateBookingData = (req, res, next) => {
   if (!booking_dates || !first_name || !last_name || !phone_number || !email || !product_id || !variant_id) {
     return res.status(400).json({
       success: false,
-      error: 'Missing required fields',
+      error: 'Missing required fieldsssss',
       required_fields: [
         'booking_dates', 
         'first_name', 
