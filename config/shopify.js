@@ -1,44 +1,246 @@
-const { shopifyApi } = require('@shopify/shopify-api');
-const { ApiVersion } = require('@shopify/shopify-api');
+// Using direct REST API calls instead of Shopify API library to avoid adapter issues
+const https = require('https');
+const http = require('http');
 
 // Check if Shopify credentials are configured
 const isShopifyConfigured = () => {
-  return process.env.SHOPIFY_API_KEY && 
-         process.env.SHOPIFY_API_SECRET && 
-         process.env.SHOPIFY_ACCESS_TOKEN &&
-         process.env.SHOPIFY_STORE_URL;
+  // Static fallback values (use these if env vars are not set)
+  const staticStoreUrl = 'shumailstravel.myshopify.com';
+  const staticAccessToken = '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';
+  
+  // Use environment variables if available, otherwise use static values
+  const storeUrl = process.env.SHOPIFY_STORE_URL || staticStoreUrl;
+  const accessToken = process.env.SHOPIFY_ACCESS_TOKEN || staticAccessToken;
+  const apiKey = process.env.SHOPIFY_API_KEY;
+  const apiSecret = process.env.SHOPIFY_API_SECRET;
+  
+  // For REST API, we only need access token and store URL
+  // API key and secret are optional for REST API calls
+  return storeUrl && accessToken;
 };
 
-// Lazy initialize Shopify API only when needed
-let shopify = null;
-const getShopifyInstance = () => {
-  if (!shopify && isShopifyConfigured()) {
-    shopify = shopifyApi({
-      apiKey: process.env.SHOPIFY_API_KEY,
-      apiSecretKey: process.env.SHOPIFY_API_SECRET,
-      scopes: ['read_products', 'write_checkouts', 'read_orders'],
-      hostName: process.env.SHOPIFY_APP_URL || 'localhost:3000',
-      apiVersion: ApiVersion.July23,
-      isEmbeddedApp: false,
-    });
-    console.log('✅ Shopify API initialized successfully');
-  }
-  return shopify;
-};
-
-// Create Shopify REST client
-function createShopifyClient() {
-  const shopifyInstance = getShopifyInstance();
-  if (!shopifyInstance) {
-    throw new Error('Shopify not configured. Please set SHOPIFY_API_KEY, SHOPIFY_API_SECRET, SHOPIFY_ACCESS_TOKEN, and SHOPIFY_STORE_URL in config.env');
-  }
-
-  const session = {
-    shop: process.env.SHOPIFY_STORE_URL,
-    accessToken: process.env.SHOPIFY_ACCESS_TOKEN,
+// Get Shopify configuration values
+const getShopifyConfig = () => {
+  // Static fallback values
+  const staticStoreUrl = 'shumailstravel.myshopify.com';
+  const staticAccessToken = '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';
+  
+  const storeUrl = (process.env.SHOPIFY_STORE_URL || staticStoreUrl).replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const accessToken = process.env.SHOPIFY_ACCESS_TOKEN || staticAccessToken;
+  
+  return {
+    storeUrl: storeUrl,
+    accessToken: accessToken,
+    apiVersion: '2024-01' // Using stable API version
   };
+};
 
-  return new shopifyInstance.clients.Rest({ session });
+// Make direct REST API call to Shopify
+async function shopifyApiRequest(method, endpoint, data = null) {
+  const config = getShopifyConfig();
+  
+  // Ensure endpoint ends with .json for Shopify REST API
+  const endpointWithJson = endpoint.endsWith('.json') ? endpoint : `${endpoint}.json`;
+  const url = `https://${config.storeUrl}/admin/api/${config.apiVersion}/${endpointWithJson}`;
+  
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(url);
+    const options = {
+      hostname: urlObj.hostname,
+      port: 443,
+      path: urlObj.pathname + urlObj.search,
+      method: method,
+      headers: {
+        'X-Shopify-Access-Token': config.accessToken,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    };
+
+    if (data && (method === 'POST' || method === 'PUT')) {
+      const postData = JSON.stringify(data);
+      options.headers['Content-Length'] = Buffer.byteLength(postData);
+    }
+
+    const req = https.request(options, (res) => {
+      let responseData = '';
+
+      // Handle redirects (3xx status codes)
+      if (res.statusCode >= 300 && res.statusCode < 400) {
+        const location = res.headers.location;
+        console.log(`[Shopify API] Redirect ${res.statusCode} to: ${location}`);
+        if (location) {
+          // Follow redirect - handle both absolute and relative URLs
+          let redirectUrl;
+          if (location.startsWith('http://') || location.startsWith('https://')) {
+            redirectUrl = new URL(location);
+          } else {
+            redirectUrl = new URL(location, `https://${config.storeUrl}`);
+          }
+          const redirectOptions = {
+            hostname: redirectUrl.hostname,
+            port: 443,
+            path: redirectUrl.pathname + redirectUrl.search,
+            method: method,
+            headers: {
+              'X-Shopify-Access-Token': config.accessToken,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            }
+          };
+          
+          if (data && (method === 'POST' || method === 'PUT')) {
+            const postData = JSON.stringify(data);
+            redirectOptions.headers['Content-Length'] = Buffer.byteLength(postData);
+          }
+          
+          const redirectReq = https.request(redirectOptions, (redirectRes) => {
+            let redirectData = '';
+            redirectRes.on('data', (chunk) => {
+              redirectData += chunk;
+            });
+            redirectRes.on('end', () => {
+              try {
+                const parsed = JSON.parse(redirectData);
+                if (redirectRes.statusCode >= 200 && redirectRes.statusCode < 300) {
+                  resolve({
+                    body: parsed,
+                    status: redirectRes.statusCode,
+                    headers: redirectRes.headers
+                  });
+                } else {
+                  reject({
+                    code: redirectRes.statusCode,
+                    message: parsed.errors || parsed.error || 'Request failed',
+                    response: {
+                      status: redirectRes.statusCode,
+                      body: parsed
+                    }
+                  });
+                }
+              } catch (e) {
+                reject({
+                  code: redirectRes.statusCode,
+                  message: 'Invalid JSON response',
+                  response: {
+                    status: redirectRes.statusCode,
+                    body: redirectData
+                  }
+                });
+              }
+            });
+          });
+          
+          redirectReq.on('error', (error) => {
+            reject({
+              code: 'NETWORK_ERROR',
+              message: error.message
+            });
+          });
+          
+          if (data && (method === 'POST' || method === 'PUT')) {
+            redirectReq.write(JSON.stringify(data));
+          }
+          
+          redirectReq.end();
+          return;
+        }
+      }
+
+      res.on('data', (chunk) => {
+        responseData += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          if (responseData.trim() === '') {
+            // Empty response
+            if (res.statusCode >= 200 && res.statusCode < 300) {
+              resolve({
+                body: {},
+                status: res.statusCode,
+                headers: res.headers
+              });
+            } else {
+              reject({
+                code: res.statusCode,
+                message: 'Empty response',
+                response: {
+                  status: res.statusCode,
+                  body: {}
+                }
+              });
+            }
+            return;
+          }
+          
+          const parsed = JSON.parse(responseData);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({
+              body: parsed,
+              status: res.statusCode,
+              headers: res.headers
+            });
+          } else {
+            reject({
+              code: res.statusCode,
+              message: parsed.errors || parsed.error || 'Request failed',
+              response: {
+                status: res.statusCode,
+                body: parsed
+              }
+            });
+          }
+        } catch (e) {
+          reject({
+            code: res.statusCode,
+            message: `Invalid JSON response: ${e.message}`,
+            response: {
+              status: res.statusCode,
+              body: responseData.substring(0, 500) // First 500 chars for debugging
+            }
+          });
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      reject({
+        code: 'NETWORK_ERROR',
+        message: error.message
+      });
+    });
+
+    if (data && (method === 'POST' || method === 'PUT')) {
+      req.write(JSON.stringify(data));
+    }
+
+    req.end();
+  });
+}
+
+// Simple REST client wrapper for Shopify API
+function createShopifyClient() {
+  const config = getShopifyConfig();
+  
+  if (!config.storeUrl || !config.accessToken) {
+    throw new Error('Shopify not configured. Please set SHOPIFY_ACCESS_TOKEN and SHOPIFY_STORE_URL in config.env');
+  }
+
+  return {
+    get: async ({ path }) => {
+      return await shopifyApiRequest('GET', path);
+    },
+    post: async ({ path, data }) => {
+      return await shopifyApiRequest('POST', path, data);
+    },
+    put: async ({ path, data }) => {
+      return await shopifyApiRequest('PUT', path, data);
+    },
+    delete: async ({ path }) => {
+      return await shopifyApiRequest('DELETE', path);
+    }
+  };
 }
 
 // Create checkout with custom attributes
@@ -218,10 +420,10 @@ async function getAllProducts() {
   try {
     const client = createShopifyClient();
     
-    // Fetch products (Shopify REST API returns up to 250 products per request)
+    // Fetch only active products (Shopify REST API returns up to 250 products per request)
     // For stores with more products, we'd need pagination, but starting with first page
     const response = await client.get({
-      path: 'products'
+      path: 'products?status=active'
     });
 
     const products = response.body?.products || [];
@@ -262,7 +464,6 @@ async function getAllProducts() {
 }
 
 module.exports = {
-  getShopifyInstance,
   createCheckout,
   getProduct,
   getVariant,

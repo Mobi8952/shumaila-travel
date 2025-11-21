@@ -105,25 +105,64 @@ async function createTables() {
 
   await pool.execute(createProductsTable);
 
-  // Create product_dates table for managing dates and available seats
+  // Create product_dates table for managing date ranges and available seats
   const createProductDatesTable = `
     CREATE TABLE IF NOT EXISTS product_dates (
       id INT AUTO_INCREMENT PRIMARY KEY,
       product_id BIGINT NOT NULL,
-      date DATE NOT NULL,
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
       available_seats INT DEFAULT 0,
       booked_seats INT DEFAULT 0,
       is_active BOOLEAN DEFAULT TRUE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      UNIQUE KEY unique_product_date (product_id, date),
       INDEX idx_product_id (product_id),
-      INDEX idx_date (date),
-      INDEX idx_is_active (is_active)
+      INDEX idx_start_date (start_date),
+      INDEX idx_end_date (end_date),
+      INDEX idx_is_active (is_active),
+      CHECK (end_date >= start_date)
     )
   `;
 
   await pool.execute(createProductDatesTable);
+  
+  // Migrate existing data if table exists with old schema
+  try {
+    const [columns] = await pool.execute(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'product_dates' 
+      AND COLUMN_NAME = 'date'
+    `);
+    
+    if (columns.length > 0) {
+      // Old schema exists, migrate data
+      console.log('Migrating product_dates table to use date ranges...');
+      await pool.execute(`
+        ALTER TABLE product_dates 
+        ADD COLUMN IF NOT EXISTS start_date DATE,
+        ADD COLUMN IF NOT EXISTS end_date DATE
+      `);
+      
+      await pool.execute(`
+        UPDATE product_dates 
+        SET start_date = date, end_date = date 
+        WHERE start_date IS NULL OR end_date IS NULL
+      `);
+      
+      await pool.execute(`
+        ALTER TABLE product_dates 
+        DROP COLUMN IF EXISTS date,
+        DROP INDEX IF EXISTS unique_product_date
+      `);
+      
+      console.log('Migration completed');
+    }
+  } catch (migrationError) {
+    console.log('No migration needed or migration already completed');
+  }
 }
 
 // Test database connection

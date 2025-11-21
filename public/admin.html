@@ -505,8 +505,6 @@
     <script>
         const API_BASE = '/api/admin';
         let currentProductId = null;
-        let currentMonth = new Date().getMonth();
-        let currentYear = new Date().getFullYear();
 
         // Tab switching
         function switchTab(tab) {
@@ -634,8 +632,10 @@
                         <h3>${product.product_name}</h3>
                         <p><strong>Product ID:</strong> ${product.product_id}</p>
                         <p><strong>Variant ID:</strong> ${product.variant_id}</p>
-                        <p><strong>Total Dates:</strong> ${product.total_dates || 0}</p>
-                        <p><strong>Active Dates:</strong> ${product.active_dates || 0}</p>
+                        <p><strong>Date Ranges:</strong> ${product.total_ranges || 0}</p>
+                        <p><strong>Active Ranges:</strong> ${product.active_ranges || 0}</p>
+                        ${product.earliest_date ? `<p><strong>Available From:</strong> ${new Date(product.earliest_date).toLocaleDateString()}</p>` : ''}
+                        ${product.latest_date ? `<p><strong>Available Until:</strong> ${new Date(product.latest_date).toLocaleDateString()}</p>` : ''}
                         <p><strong>Available Seats:</strong> ${product.total_available_seats || 0}</p>
                         <p><strong>Booked Seats:</strong> ${product.total_booked_seats || 0}</p>
                     </div>
@@ -648,7 +648,7 @@
         // Open product dates modal
         async function openProductDates(productId, productName) {
             currentProductId = productId;
-            document.getElementById('modal-product-name').textContent = `${productName} - Manage Dates`;
+            document.getElementById('modal-product-name').textContent = `${productName} - Manage Date Ranges`;
             document.getElementById('product-dates-modal').classList.add('active');
             
             await loadProductDates(productId);
@@ -672,78 +672,58 @@
             }
         }
 
-        function displayProductDates(dates, productId) {
+        function displayProductDates(dateRanges, productId) {
             const modalBody = document.getElementById('modal-content-body');
             
-            // Create calendar
-            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
-                'July', 'August', 'September', 'October', 'November', 'December'];
-            
-            const firstDay = new Date(currentYear, currentMonth, 1).getDay();
-            const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-            
-            // Create date map for quick lookup
-            const dateMap = {};
-            dates.forEach(d => {
-                const dateKey = d.date;
-                dateMap[dateKey] = d;
-            });
-
             let html = `
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <button class="btn btn-primary" onclick="changeMonth(-1)">← Previous</button>
-                    <h3>${monthNames[currentMonth]} ${currentYear}</h3>
-                    <button class="btn btn-primary" onclick="changeMonth(1)">Next →</button>
+                <div style="margin-bottom: 30px;">
+                    <h3>Product Availability Date Ranges</h3>
+                    <p style="color: #6c757d;">Manage when this product is available for booking</p>
                 </div>
-                
-                <div class="calendar">
-                    <div class="calendar-header">Sun</div>
-                    <div class="calendar-header">Mon</div>
-                    <div class="calendar-header">Tue</div>
-                    <div class="calendar-header">Wed</div>
-                    <div class="calendar-header">Thu</div>
-                    <div class="calendar-header">Fri</div>
-                    <div class="calendar-header">Sat</div>
             `;
 
-            // Empty cells for days before month starts
-            for (let i = 0; i < firstDay; i++) {
-                html += '<div class="calendar-day"></div>';
-            }
-
-            // Days of the month
-            for (let day = 1; day <= daysInMonth; day++) {
-                const date = new Date(currentYear, currentMonth, day);
-                const dateStr = date.toISOString().split('T')[0];
-                const dateInfo = dateMap[dateStr];
-                
-                const hasDate = dateInfo !== undefined;
-                const isPast = date < new Date(new Date().setHours(0, 0, 0, 0));
-                
-                html += `
-                    <div class="calendar-day ${hasDate ? 'has-date' : ''} ${isPast ? 'past' : ''}" 
-                         onclick="openDateEditor('${dateStr}', ${hasDate ? dateInfo.id : 'null'}, ${hasDate ? dateInfo.available_seats : 0}, ${hasDate ? dateInfo.booked_seats : 0}, ${hasDate ? dateInfo.is_active : true})">
-                        <div class="date-number">${day}</div>
-                        ${hasDate ? `
-                            <div class="seats-info">
-                                Available: ${dateInfo.available_seats}<br>
-                                Booked: ${dateInfo.booked_seats}
+            // Display existing date ranges
+            if (dateRanges.length === 0) {
+                html += '<div class="empty-state"><p>No date ranges configured. Add a date range below.</p></div>';
+            } else {
+                html += '<div style="margin-bottom: 20px;">';
+                dateRanges.forEach(range => {
+                    const startDate = new Date(range.start_date).toLocaleDateString();
+                    const endDate = new Date(range.end_date).toLocaleDateString();
+                    const isActive = range.is_active;
+                    
+                    html += `
+                        <div class="product-item" style="margin-bottom: 15px; cursor: pointer;" 
+                             onclick="openDateRangeEditor(${range.id}, '${range.start_date}', '${range.end_date}', ${range.available_seats}, ${range.booked_seats}, ${isActive})">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <div>
+                                    <h4 style="margin: 0 0 10px 0; color: #667eea;">
+                                        ${startDate} - ${endDate}
+                                        ${!isActive ? '<span class="badge" style="background: #dc3545; color: white; margin-left: 10px;">Inactive</span>' : '<span class="badge completed">Active</span>'}
+                                    </h4>
+                                    <p style="margin: 5px 0;"><strong>Available Seats:</strong> ${range.available_seats}</p>
+                                    <p style="margin: 5px 0;"><strong>Booked Seats:</strong> ${range.booked_seats}</p>
+                                </div>
+                                <button class="btn btn-danger" onclick="event.stopPropagation(); deleteDateRange(${range.id})">Delete</button>
                             </div>
-                        ` : ''}
-                    </div>
-                `;
+                        </div>
+                    `;
+                });
+                html += '</div>';
             }
 
-            html += '</div>';
-
-            // Add date form
+            // Add date range form
             html += `
                 <div class="date-form">
-                    <h3>Add/Edit Date</h3>
-                    <form id="date-form" onsubmit="saveDate(event)">
+                    <h3>${currentDateId ? 'Edit' : 'Add'} Date Range</h3>
+                    <form id="date-form" onsubmit="saveDateRange(event)">
                         <div class="form-group">
-                            <label>Date</label>
-                            <input type="date" id="date-input" required>
+                            <label>Start Date</label>
+                            <input type="date" id="start-date-input" required>
+                        </div>
+                        <div class="form-group">
+                            <label>End Date</label>
+                            <input type="date" id="end-date-input" required>
                         </div>
                         <div class="form-group">
                             <label>Available Seats</label>
@@ -761,8 +741,8 @@
                             </select>
                         </div>
                         <div class="form-actions">
-                            <button type="submit" class="btn btn-success">Save Date</button>
-                            <button type="button" class="btn btn-danger" onclick="deleteDate()" id="delete-btn" style="display: none;">Delete Date</button>
+                            <button type="submit" class="btn btn-success">${currentDateId ? 'Update' : 'Add'} Date Range</button>
+                            <button type="button" class="btn btn-danger" onclick="deleteDateRange()" id="delete-btn" style="display: none;">Delete Range</button>
                             <button type="button" class="btn btn-primary" onclick="resetForm()">Reset</button>
                         </div>
                     </form>
@@ -772,22 +752,11 @@
             modalBody.innerHTML = html;
         }
 
-        function changeMonth(direction) {
-            currentMonth += direction;
-            if (currentMonth < 0) {
-                currentMonth = 11;
-                currentYear--;
-            } else if (currentMonth > 11) {
-                currentMonth = 0;
-                currentYear++;
-            }
-            loadProductDates(currentProductId);
-        }
-
         let currentDateId = null;
 
-        function openDateEditor(dateStr, dateId, availableSeats, bookedSeats, isActive) {
-            document.getElementById('date-input').value = dateStr;
+        function openDateRangeEditor(dateId, startDate, endDate, availableSeats, bookedSeats, isActive) {
+            document.getElementById('start-date-input').value = startDate;
+            document.getElementById('end-date-input').value = endDate;
             document.getElementById('available-seats-input').value = availableSeats;
             document.getElementById('booked-seats-input').value = bookedSeats;
             document.getElementById('is-active-input').value = isActive;
@@ -800,32 +769,47 @@
             } else {
                 deleteBtn.style.display = 'none';
             }
+            
+            // Scroll to form
+            document.querySelector('.date-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
-        async function saveDate(event) {
+        async function saveDateRange(event) {
             event.preventDefault();
             
-            const date = document.getElementById('date-input').value;
+            const startDate = document.getElementById('start-date-input').value;
+            const endDate = document.getElementById('end-date-input').value;
             const availableSeats = parseInt(document.getElementById('available-seats-input').value);
             const bookedSeats = parseInt(document.getElementById('booked-seats-input').value);
             const isActive = document.getElementById('is-active-input').value === 'true';
 
+            if (new Date(endDate) < new Date(startDate)) {
+                showError('modal-content-body', 'End date must be greater than or equal to start date');
+                return;
+            }
+
             try {
                 let response;
                 if (currentDateId === null) {
-                    // Create new date
+                    // Create new date range
                     response = await fetch(`${API_BASE}/products/${currentProductId}/dates`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ date, available_seats: availableSeats, is_active: isActive })
+                        body: JSON.stringify({ 
+                            start_date: startDate, 
+                            end_date: endDate,
+                            available_seats: availableSeats, 
+                            is_active: isActive 
+                        })
                     });
                 } else {
-                    // Update existing date
+                    // Update existing date range
                     response = await fetch(`${API_BASE}/products/${currentProductId}/dates/${currentDateId}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ 
-                            date, 
+                            start_date: startDate,
+                            end_date: endDate,
                             available_seats: availableSeats, 
                             booked_seats: bookedSeats,
                             is_active: isActive 
@@ -836,45 +820,51 @@
                 const result = await response.json();
                 
                 if (result.success) {
-                    showSuccess('Date saved successfully!');
+                    showSuccess('Date range saved successfully!');
                     await loadProductDates(currentProductId);
                     resetForm();
                 } else {
-                    showError('modal-content-body', result.error || 'Failed to save date');
+                    showError('modal-content-body', result.error || 'Failed to save date range');
                 }
             } catch (error) {
-                showError('modal-content-body', 'Error saving date: ' + error.message);
+                showError('modal-content-body', 'Error saving date range: ' + error.message);
             }
         }
 
-        async function deleteDate() {
-            if (!currentDateId) return;
+        async function deleteDateRange(dateId) {
+            const idToDelete = dateId || currentDateId;
+            if (!idToDelete) return;
             
-            if (!confirm('Are you sure you want to delete this date?')) return;
+            if (!confirm('Are you sure you want to delete this date range?')) return;
 
             try {
-                const response = await fetch(`${API_BASE}/products/${currentProductId}/dates/${currentDateId}`, {
+                const response = await fetch(`${API_BASE}/products/${currentProductId}/dates/${idToDelete}`, {
                     method: 'DELETE'
                 });
 
                 const result = await response.json();
                 
                 if (result.success) {
-                    showSuccess('Date deleted successfully!');
+                    showSuccess('Date range deleted successfully!');
                     await loadProductDates(currentProductId);
                     resetForm();
                 } else {
-                    showError('modal-content-body', result.error || 'Failed to delete date');
+                    showError('modal-content-body', result.error || 'Failed to delete date range');
                 }
             } catch (error) {
-                showError('modal-content-body', 'Error deleting date: ' + error.message);
+                showError('modal-content-body', 'Error deleting date range: ' + error.message);
             }
         }
 
         function resetForm() {
-            document.getElementById('date-form').reset();
+            if (document.getElementById('date-form')) {
+                document.getElementById('date-form').reset();
+            }
             currentDateId = null;
-            document.getElementById('delete-btn').style.display = 'none';
+            const deleteBtn = document.getElementById('delete-btn');
+            if (deleteBtn) {
+                deleteBtn.style.display = 'none';
+            }
         }
 
         function closeModal() {

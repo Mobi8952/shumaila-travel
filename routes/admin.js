@@ -70,14 +70,20 @@ router.get('/products', async (req, res) => {
       });
     }
 
-    const shopifyProducts = shopifyResult.products || [];
+    let shopifyProducts = shopifyResult.products || [];
+    
+    // Filter to only show active products
+    shopifyProducts = shopifyProducts.filter(product => {
+      // Shopify products have a 'status' field: 'active', 'archived', or 'draft'
+      return product.status === 'active';
+    });
     
     if (shopifyProducts.length === 0) {
       return res.json({
         success: true,
         data: [],
         count: 0,
-        message: 'No products found in Shopify store'
+        message: 'No active products found in Shopify store'
       });
     }
 
@@ -91,15 +97,17 @@ router.get('/products', async (req, res) => {
       });
     }
 
-    // Build query to get date/seat stats for all products
+    // Build query to get date range/seat stats for all products
     const placeholders = productIds.map(() => '?').join(',');
     const dateStatsQuery = `
       SELECT 
         product_id,
-        COUNT(DISTINCT id) as total_dates,
-        SUM(CASE WHEN is_active = TRUE THEN 1 ELSE 0 END) as active_dates,
+        COUNT(DISTINCT id) as total_ranges,
+        SUM(CASE WHEN is_active = TRUE THEN 1 ELSE 0 END) as active_ranges,
         SUM(available_seats) as total_available_seats,
-        SUM(booked_seats) as total_booked_seats
+        SUM(booked_seats) as total_booked_seats,
+        MIN(start_date) as earliest_date,
+        MAX(end_date) as latest_date
       FROM product_dates
       WHERE product_id IN (${placeholders})
       GROUP BY product_id
@@ -107,14 +115,16 @@ router.get('/products', async (req, res) => {
     
     const [dateStatsRows] = await pool.execute(dateStatsQuery, productIds);
     
-    // Create a map of product_id to date stats
+    // Create a map of product_id to date range stats
     const dateStatsMap = {};
     dateStatsRows.forEach(row => {
       dateStatsMap[row.product_id] = {
-        total_dates: row.total_dates || 0,
-        active_dates: row.active_dates || 0,
+        total_ranges: row.total_ranges || 0,
+        active_ranges: row.active_ranges || 0,
         total_available_seats: row.total_available_seats || 0,
-        total_booked_seats: row.total_booked_seats || 0
+        total_booked_seats: row.total_booked_seats || 0,
+        earliest_date: row.earliest_date,
+        latest_date: row.latest_date
       };
     });
 
@@ -123,10 +133,12 @@ router.get('/products', async (req, res) => {
     
     for (const product of shopifyProducts) {
       const productDateStats = dateStatsMap[product.id] || {
-        total_dates: 0,
-        active_dates: 0,
+        total_ranges: 0,
+        active_ranges: 0,
         total_available_seats: 0,
-        total_booked_seats: 0
+        total_booked_seats: 0,
+        earliest_date: null,
+        latest_date: null
       };
 
       if (product.variants && product.variants.length > 0) {
@@ -140,11 +152,13 @@ router.get('/products', async (req, res) => {
             price: variant.price || '0.00',
             sku: variant.sku || '',
             inventory_quantity: variant.inventory_quantity || 0,
-            // Date/seat stats from database (shared across all variants of same product)
-            total_dates: productDateStats.total_dates,
-            active_dates: productDateStats.active_dates,
+            // Date range/seat stats from database (shared across all variants of same product)
+            total_ranges: productDateStats.total_ranges,
+            active_ranges: productDateStats.active_ranges,
             total_available_seats: productDateStats.total_available_seats,
             total_booked_seats: productDateStats.total_booked_seats,
+            earliest_date: productDateStats.earliest_date,
+            latest_date: productDateStats.latest_date,
             // Additional Shopify data
             shopify_product: {
               id: product.id,
@@ -167,11 +181,13 @@ router.get('/products', async (req, res) => {
           price: '0.00',
           sku: '',
           inventory_quantity: 0,
-          // Date/seat stats from database
-          total_dates: productDateStats.total_dates,
-          active_dates: productDateStats.active_dates,
+          // Date range/seat stats from database
+          total_ranges: productDateStats.total_ranges,
+          active_ranges: productDateStats.active_ranges,
           total_available_seats: productDateStats.total_available_seats,
           total_booked_seats: productDateStats.total_booked_seats,
+          earliest_date: productDateStats.earliest_date,
+          latest_date: productDateStats.latest_date,
           // Additional Shopify data
           shopify_product: {
             id: product.id,
@@ -202,7 +218,7 @@ router.get('/products', async (req, res) => {
   }
 });
 
-// GET /api/admin/products/:productId/dates - Get all dates for a specific product
+// GET /api/admin/products/:productId/dates - Get all date ranges for a specific product
 router.get('/products/:productId/dates', async (req, res) => {
   try {
     const { productId } = req.params;
@@ -211,7 +227,8 @@ router.get('/products/:productId/dates', async (req, res) => {
       SELECT 
         id,
         product_id,
-        date,
+        start_date,
+        end_date,
         available_seats,
         booked_seats,
         is_active,
@@ -219,7 +236,7 @@ router.get('/products/:productId/dates', async (req, res) => {
         updated_at
       FROM product_dates
       WHERE product_id = ?
-      ORDER BY date ASC
+      ORDER BY start_date ASC
     `;
     
     const [rows] = await pool.execute(query, [productId]);
@@ -230,7 +247,7 @@ router.get('/products/:productId/dates', async (req, res) => {
       count: rows.length
     });
   } catch (error) {
-    console.error('Error fetching product dates:', error);
+    console.error('Error fetching product date ranges:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -277,41 +294,45 @@ router.post('/products', async (req, res) => {
   }
 });
 
-// POST /api/admin/products/:productId/dates - Add or update a product date
+// POST /api/admin/products/:productId/dates - Add or update a product date range
 router.post('/products/:productId/dates', async (req, res) => {
   try {
     const { productId } = req.params;
-    const { date, available_seats, is_active } = req.body;
+    const { start_date, end_date, available_seats, is_active } = req.body;
 
-    if (!date) {
+    if (!start_date || !end_date) {
       return res.status(400).json({
         success: false,
-        error: 'Date is required'
+        error: 'Start date and end date are required'
+      });
+    }
+
+    if (new Date(end_date) < new Date(start_date)) {
+      return res.status(400).json({
+        success: false,
+        error: 'End date must be greater than or equal to start date'
       });
     }
 
     const query = `
-      INSERT INTO product_dates (product_id, date, available_seats, is_active)
-      VALUES (?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE
-        available_seats = VALUES(available_seats),
-        is_active = VALUES(is_active),
-        updated_at = CURRENT_TIMESTAMP
+      INSERT INTO product_dates (product_id, start_date, end_date, available_seats, is_active)
+      VALUES (?, ?, ?, ?, ?)
     `;
 
     await pool.execute(query, [
       productId,
-      date,
+      start_date,
+      end_date,
       available_seats || 0,
       is_active !== undefined ? is_active : true
     ]);
 
     res.status(201).json({
       success: true,
-      message: 'Product date added/updated successfully'
+      message: 'Product date range added successfully'
     });
   } catch (error) {
-    console.error('Error adding/updating product date:', error);
+    console.error('Error adding/updating product date range:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -320,18 +341,22 @@ router.post('/products/:productId/dates', async (req, res) => {
   }
 });
 
-// PUT /api/admin/products/:productId/dates/:dateId - Update a specific product date
+// PUT /api/admin/products/:productId/dates/:dateId - Update a specific product date range
 router.put('/products/:productId/dates/:dateId', async (req, res) => {
   try {
     const { dateId } = req.params;
-    const { date, available_seats, booked_seats, is_active } = req.body;
+    const { start_date, end_date, available_seats, booked_seats, is_active } = req.body;
 
     const updateFields = [];
     const updateValues = [];
 
-    if (date !== undefined) {
-      updateFields.push('date = ?');
-      updateValues.push(date);
+    if (start_date !== undefined) {
+      updateFields.push('start_date = ?');
+      updateValues.push(start_date);
+    }
+    if (end_date !== undefined) {
+      updateFields.push('end_date = ?');
+      updateValues.push(end_date);
     }
     if (available_seats !== undefined) {
       updateFields.push('available_seats = ?');
@@ -353,6 +378,16 @@ router.put('/products/:productId/dates/:dateId', async (req, res) => {
       });
     }
 
+    // Validate date range if both dates are being updated
+    if (start_date !== undefined && end_date !== undefined) {
+      if (new Date(end_date) < new Date(start_date)) {
+        return res.status(400).json({
+          success: false,
+          error: 'End date must be greater than or equal to start date'
+        });
+      }
+    }
+
     updateValues.push(dateId);
 
     const query = `
@@ -366,16 +401,16 @@ router.put('/products/:productId/dates/:dateId', async (req, res) => {
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        error: 'Product date not found'
+        error: 'Product date range not found'
       });
     }
 
     res.json({
       success: true,
-      message: 'Product date updated successfully'
+      message: 'Product date range updated successfully'
     });
   } catch (error) {
-    console.error('Error updating product date:', error);
+    console.error('Error updating product date range:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error',
@@ -384,7 +419,7 @@ router.put('/products/:productId/dates/:dateId', async (req, res) => {
   }
 });
 
-// DELETE /api/admin/products/:productId/dates/:dateId - Delete a product date
+// DELETE /api/admin/products/:productId/dates/:dateId - Delete a product date range
 router.delete('/products/:productId/dates/:dateId', async (req, res) => {
   try {
     const { dateId } = req.params;
@@ -395,16 +430,16 @@ router.delete('/products/:productId/dates/:dateId', async (req, res) => {
     if (result.affectedRows === 0) {
       return res.status(404).json({
         success: false,
-        error: 'Product date not found'
+        error: 'Product date range not found'
       });
     }
 
     res.json({
       success: true,
-      message: 'Product date deleted successfully'
+      message: 'Product date range deleted successfully'
     });
   } catch (error) {
-    console.error('Error deleting product date:', error);
+    console.error('Error deleting product date range:', error);
     res.status(500).json({
       success: false,
       error: 'Internal server error',
