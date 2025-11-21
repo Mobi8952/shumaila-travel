@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { createCheckout, getProduct, getVariant, isShopifyConfigured } = require('../config/shopify');
+const { createCheckout, isShopifyConfigured } = require('../config/shopify');
 const { pool } = require('../config/database');
 
 // Validation middleware
@@ -67,65 +67,24 @@ router.post('/create', validateBookingData, async (req, res) => {
     } = req.body;
 
     let checkoutResult = { success: true, checkout_id: null, checkout_url: null };
-    let productResult = { success: true, product: { title: 'Test Product' } };
-    let variantResult = { success: true, variant: { title: 'Test Variant', price: '0.00' } };
 
     // Only use Shopify if configured
     if (isShopifyConfigured()) {
-      // Check if product validation should be skipped (useful for testing)
-      const skipValidation = process.env.SKIP_PRODUCT_VALIDATION === 'true' || req.query.skip_validation === 'true';
-      
-      if (!skipValidation) {
-        // Verify product and variant exist in Shopify
-        [productResult, variantResult] = await Promise.all([
-          getProduct(product_id),
-          getVariant(variant_id)
-        ]);
+      // Create Shopify checkout (no product/variant validation)
+      checkoutResult = await createCheckout({
+        booking_dates,
+        first_name,
+        last_name,
+        phone_number,
+        email,
+        product_id,
+        variant_id,
+        quantity
+      });
 
-        if (!productResult.success) {
-          return res.status(400).json({
-            success: false,
-            error: 'Invalid product ID',
-            details: productResult.error,
-            suggestion: 'To skip product validation during testing, set SKIP_PRODUCT_VALIDATION=true in your environment variables or add ?skip_validation=true to the request URL. Make sure the product ID exists in your Shopify store.'
-          });
-        }
-
-        if (!variantResult.success) {
-          return res.status(400).json({
-            success: false,
-            error: 'Invalid variant ID',
-            details: variantResult.error,
-            suggestion: 'To skip variant validation during testing, set SKIP_PRODUCT_VALIDATION=true in your environment variables or add ?skip_validation=true to the request URL. Make sure the variant ID exists and belongs to the specified product in your Shopify store.'
-          });
-        }
-      } else {
-        console.log('⚠️  Product validation skipped - using default product/variant info');
-      }
-
-      // Create Shopify checkout only if validation passed
-      // If validation was skipped, we skip checkout creation too
-      if (!skipValidation && productResult.success && variantResult.success) {
-        checkoutResult = await createCheckout({
-          booking_dates,
-          first_name,
-          last_name,
-          phone_number,
-          email,
-          product_id,
-          variant_id,
-          quantity
-        });
-
-        if (!checkoutResult.success) {
-          return res.status(500).json({
-            success: false,
-            error: 'Failed to create Shopify checkout',
-            details: checkoutResult.error
-          });
-        }
-      } else if (skipValidation) {
-        console.log('⚠️  Skipping checkout creation (validation was skipped)');
+      if (!checkoutResult.success) {
+        // Log error but continue with booking creation
+        console.warn('⚠️  Failed to create Shopify checkout:', checkoutResult.error);
       }
     } else {
       console.log('⚠️  Shopify not configured - creating booking without checkout');
@@ -158,11 +117,8 @@ router.post('/create', validateBookingData, async (req, res) => {
         booking_id: result.insertId,
         checkout_url: checkoutResult.checkout_url,
         checkout_id: checkoutResult.checkout_id,
-        product_info: {
-          product_title: productResult.product.title,
-          variant_title: variantResult.variant.title,
-          price: variantResult.variant.price
-        }
+        product_id: product_id,
+        variant_id: variant_id
       }
     });
 
