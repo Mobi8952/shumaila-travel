@@ -72,46 +72,60 @@ router.post('/create', validateBookingData, async (req, res) => {
 
     // Only use Shopify if configured
     if (isShopifyConfigured()) {
-      // Verify product and variant exist in Shopify
-      [productResult, variantResult] = await Promise.all([
-        getProduct(product_id),
-        getVariant(variant_id)
-      ]);
+      // Check if product validation should be skipped (useful for testing)
+      const skipValidation = process.env.SKIP_PRODUCT_VALIDATION === 'true' || req.query.skip_validation === 'true';
+      
+      if (!skipValidation) {
+        // Verify product and variant exist in Shopify
+        [productResult, variantResult] = await Promise.all([
+          getProduct(product_id),
+          getVariant(variant_id)
+        ]);
 
-      if (!productResult.success) {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid product ID',
-          details: productResult.error
-        });
+        if (!productResult.success) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid product ID',
+            details: productResult.error,
+            suggestion: 'To skip product validation during testing, set SKIP_PRODUCT_VALIDATION=true in your environment variables or add ?skip_validation=true to the request URL. Make sure the product ID exists in your Shopify store.'
+          });
+        }
+
+        if (!variantResult.success) {
+          return res.status(400).json({
+            success: false,
+            error: 'Invalid variant ID',
+            details: variantResult.error,
+            suggestion: 'To skip variant validation during testing, set SKIP_PRODUCT_VALIDATION=true in your environment variables or add ?skip_validation=true to the request URL. Make sure the variant ID exists and belongs to the specified product in your Shopify store.'
+          });
+        }
+      } else {
+        console.log('⚠️  Product validation skipped - using default product/variant info');
       }
 
-      if (!variantResult.success) {
-        return res.status(400).json({
-          success: false,
-          error: 'Invalid variant ID',
-          details: variantResult.error
+      // Create Shopify checkout only if validation passed
+      // If validation was skipped, we skip checkout creation too
+      if (!skipValidation && productResult.success && variantResult.success) {
+        checkoutResult = await createCheckout({
+          booking_dates,
+          first_name,
+          last_name,
+          phone_number,
+          email,
+          product_id,
+          variant_id,
+          quantity
         });
-      }
 
-      // Create Shopify checkout
-      checkoutResult = await createCheckout({
-        booking_dates,
-        first_name,
-        last_name,
-        phone_number,
-        email,
-        product_id,
-        variant_id,
-        quantity
-      });
-
-      if (!checkoutResult.success) {
-        return res.status(500).json({
-          success: false,
-          error: 'Failed to create Shopify checkout',
-          details: checkoutResult.error
-        });
+        if (!checkoutResult.success) {
+          return res.status(500).json({
+            success: false,
+            error: 'Failed to create Shopify checkout',
+            details: checkoutResult.error
+          });
+        }
+      } else if (skipValidation) {
+        console.log('⚠️  Skipping checkout creation (validation was skipped)');
       }
     } else {
       console.log('⚠️  Shopify not configured - creating booking without checkout');
