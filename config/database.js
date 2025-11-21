@@ -18,6 +18,9 @@ const pool = mysql.createPool(dbConfig);
 // Initialize database and create tables
 async function initializeDatabase() {
   try {
+    console.log('Attempting to connect to MySQL database...');
+    console.log(`Host: ${dbConfig.host}, Port: ${dbConfig.port}, Database: ${dbConfig.database}`);
+    
     // Create database if it doesn't exist
     const connection = await mysql.createConnection({
       host: dbConfig.host,
@@ -31,9 +34,31 @@ async function initializeDatabase() {
 
     // Create tables
     await createTables();
-    console.log('Database tables created successfully');
+    console.log('✅ Database tables created successfully');
   } catch (error) {
-    console.error('Database initialization error:', error);
+    console.error('\n❌ Database initialization error:');
+    console.error('Error code:', error.code);
+    console.error('Error message:', error.message);
+    
+    if (error.code === 'ECONNREFUSED') {
+      console.error('\n⚠️  MySQL connection refused. Please check:');
+      console.error('1. Is MySQL server running?');
+      console.error('2. Is the host and port correct? (default: localhost:3306)');
+      console.error('3. Check your database credentials in config.env');
+      console.error('\nTo start MySQL on Windows:');
+      console.error('  net start mysql80 (or your MySQL service name)');
+      console.error('\nTo start MySQL on macOS/Linux:');
+      console.error('  sudo systemctl start mysql');
+      console.error('  or: brew services start mysql');
+    } else if (error.code === 'ER_ACCESS_DENIED_ERROR') {
+      console.error('\n⚠️  Access denied. Please check:');
+      console.error('1. Database username and password in config.env');
+      console.error('2. User has proper permissions');
+    } else if (error.code === 'ENOTFOUND') {
+      console.error('\n⚠️  Host not found. Please check:');
+      console.error('1. DB_HOST in config.env is correct');
+    }
+    
     throw error;
   }
 }

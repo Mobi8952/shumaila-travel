@@ -51,14 +51,18 @@ app.use('*', (req, res) => {
 async function startServer() {
   try {
     await initializeDatabase();
-    console.log('Database initialized successfully');
+    console.log('✅ Database initialized successfully');
     
     app.listen(PORT, () => {
-      console.log(`Server is running on port ${PORT}`);
-      console.log(`Health check: http://localhost:${PORT}/health`);
+      console.log('\n🚀 Server started successfully!');
+      console.log(`📍 Server is running on port ${PORT}`);
+      console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+      console.log(`🎛️  Admin panel: http://localhost:${PORT}/admin`);
+      console.log(`📋 API base: http://localhost:${PORT}/api`);
     });
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error('\n❌ Failed to start server due to database connection error');
+    console.error('Please fix the database connection issue and try again.\n');
     process.exit(1);
   }
 }

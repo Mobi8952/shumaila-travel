@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { pool } = require('../config/database');
+const { getAllProducts, isShopifyConfigured } = require('../config/shopify');
 
 // GET /api/admin/bookings - Get all bookings
 router.get('/bookings', async (req, res) => {
@@ -48,34 +49,148 @@ router.get('/bookings', async (req, res) => {
   }
 });
 
-// GET /api/admin/products - Get all products
+// GET /api/admin/products - Get all products directly from Shopify
 router.get('/products', async (req, res) => {
   try {
-    const query = `
+    // Fetch products directly from Shopify
+    if (!isShopifyConfigured()) {
+      return res.status(400).json({
+        success: false,
+        error: 'Shopify is not configured. Please set SHOPIFY_ACCESS_TOKEN and SHOPIFY_STORE_URL in config.env'
+      });
+    }
+
+    const shopifyResult = await getAllProducts();
+    
+    if (!shopifyResult.success) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch products from Shopify',
+        details: shopifyResult.error
+      });
+    }
+
+    const shopifyProducts = shopifyResult.products || [];
+    
+    if (shopifyProducts.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        count: 0,
+        message: 'No products found in Shopify store'
+      });
+    }
+
+    // Get date/seat information from database for all products
+    const productIds = shopifyProducts.map(p => p.id);
+    if (productIds.length === 0) {
+      return res.json({
+        success: true,
+        data: [],
+        count: 0
+      });
+    }
+
+    // Build query to get date/seat stats for all products
+    const placeholders = productIds.map(() => '?').join(',');
+    const dateStatsQuery = `
       SELECT 
-        p.id,
-        p.product_id,
-        p.variant_id,
-        p.product_name,
-        p.variant_name,
-        COUNT(DISTINCT pd.id) as total_dates,
-        SUM(CASE WHEN pd.is_active = TRUE THEN 1 ELSE 0 END) as active_dates,
-        SUM(pd.available_seats) as total_available_seats,
-        SUM(pd.booked_seats) as total_booked_seats,
-        p.created_at,
-        p.updated_at
-      FROM products p
-      LEFT JOIN product_dates pd ON p.product_id = pd.product_id
-      GROUP BY p.id, p.product_id, p.variant_id, p.product_name, p.variant_name, p.created_at, p.updated_at
-      ORDER BY p.created_at DESC
+        product_id,
+        COUNT(DISTINCT id) as total_dates,
+        SUM(CASE WHEN is_active = TRUE THEN 1 ELSE 0 END) as active_dates,
+        SUM(available_seats) as total_available_seats,
+        SUM(booked_seats) as total_booked_seats
+      FROM product_dates
+      WHERE product_id IN (${placeholders})
+      GROUP BY product_id
     `;
     
-    const [rows] = await pool.execute(query);
+    const [dateStatsRows] = await pool.execute(dateStatsQuery, productIds);
+    
+    // Create a map of product_id to date stats
+    const dateStatsMap = {};
+    dateStatsRows.forEach(row => {
+      dateStatsMap[row.product_id] = {
+        total_dates: row.total_dates || 0,
+        active_dates: row.active_dates || 0,
+        total_available_seats: row.total_available_seats || 0,
+        total_booked_seats: row.total_booked_seats || 0
+      };
+    });
+
+    // Format products with variants and merge date/seat info from database
+    const formattedProducts = [];
+    
+    for (const product of shopifyProducts) {
+      const productDateStats = dateStatsMap[product.id] || {
+        total_dates: 0,
+        active_dates: 0,
+        total_available_seats: 0,
+        total_booked_seats: 0
+      };
+
+      if (product.variants && product.variants.length > 0) {
+        // Product has variants - create entry for each variant
+        for (const variant of product.variants) {
+          formattedProducts.push({
+            product_id: product.id,
+            variant_id: variant.id,
+            product_name: product.title,
+            variant_name: variant.title || 'Default',
+            price: variant.price || '0.00',
+            sku: variant.sku || '',
+            inventory_quantity: variant.inventory_quantity || 0,
+            // Date/seat stats from database (shared across all variants of same product)
+            total_dates: productDateStats.total_dates,
+            active_dates: productDateStats.active_dates,
+            total_available_seats: productDateStats.total_available_seats,
+            total_booked_seats: productDateStats.total_booked_seats,
+            // Additional Shopify data
+            shopify_product: {
+              id: product.id,
+              handle: product.handle,
+              status: product.status,
+              vendor: product.vendor,
+              product_type: product.product_type,
+              created_at: product.created_at,
+              updated_at: product.updated_at
+            }
+          });
+        }
+      } else {
+        // Product has no variants - use product ID as variant ID
+        formattedProducts.push({
+          product_id: product.id,
+          variant_id: product.id,
+          product_name: product.title,
+          variant_name: 'Default',
+          price: '0.00',
+          sku: '',
+          inventory_quantity: 0,
+          // Date/seat stats from database
+          total_dates: productDateStats.total_dates,
+          active_dates: productDateStats.active_dates,
+          total_available_seats: productDateStats.total_available_seats,
+          total_booked_seats: productDateStats.total_booked_seats,
+          // Additional Shopify data
+          shopify_product: {
+            id: product.id,
+            handle: product.handle,
+            status: product.status,
+            vendor: product.vendor,
+            product_type: product.product_type,
+            created_at: product.created_at,
+            updated_at: product.updated_at
+          }
+        });
+      }
+    }
 
     res.json({
       success: true,
-      data: rows,
-      count: rows.length
+      data: formattedProducts,
+      count: formattedProducts.length,
+      source: 'shopify'
     });
   } catch (error) {
     console.error('Error fetching products:', error);

@@ -213,10 +213,59 @@ async function getVariant(variantId) {
   }
 }
 
+// Get all products from Shopify store
+async function getAllProducts() {
+  try {
+    const client = createShopifyClient();
+    
+    // Fetch products (Shopify REST API returns up to 250 products per request)
+    // For stores with more products, we'd need pagination, but starting with first page
+    const response = await client.get({
+      path: 'products'
+    });
+
+    const products = response.body?.products || [];
+
+    return {
+      success: true,
+      products: products
+    };
+
+  } catch (error) {
+    console.error('Error fetching all products:', error);
+    
+    let errorMessage = error.message || 'Unknown error';
+    let errorDetails = errorMessage;
+    let statusCode = error.code || error.status || error.statusCode || 'Unknown';
+    
+    if (error.response) {
+      if (error.response.body) {
+        const errorBody = error.response.body;
+        if (errorBody.errors) {
+          errorDetails = JSON.stringify(errorBody.errors);
+        } else if (errorBody.error) {
+          errorDetails = errorBody.error;
+        } else if (typeof errorBody === 'string') {
+          errorDetails = errorBody;
+        }
+      }
+      if (error.response.status) {
+        statusCode = error.response.status;
+      }
+    }
+    
+    return {
+      success: false,
+      error: `Received an error response (${statusCode}) from Shopify: "${errorDetails}"`
+    };
+  }
+}
+
 module.exports = {
   getShopifyInstance,
   createCheckout,
   getProduct,
   getVariant,
+  getAllProducts,
   isShopifyConfigured
 };
