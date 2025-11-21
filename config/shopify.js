@@ -96,8 +96,11 @@ async function getProduct(productId) {
   try {
     const client = createShopifyClient();
     
+    // Convert productId to string if it's a number (Shopify API expects string)
+    const productIdStr = String(productId);
+    
     const response = await client.get({
-      path: `products/${productId}`
+      path: `products/${productIdStr}`
     });
 
     return {
@@ -107,9 +110,44 @@ async function getProduct(productId) {
 
   } catch (error) {
     console.error('Error fetching product:', error);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      status: error.status,
+      statusCode: error.statusCode,
+      response: error.response
+    });
+    
+    // Extract more detailed error information
+    let errorMessage = error.message || 'Unknown error';
+    let errorDetails = errorMessage;
+    let statusCode = error.code || error.status || error.statusCode || 'Unknown';
+    
+    // Check if error has response body with more details
+    if (error.response) {
+      if (error.response.body) {
+        const errorBody = error.response.body;
+        if (errorBody.errors) {
+          errorDetails = JSON.stringify(errorBody.errors);
+        } else if (errorBody.error) {
+          errorDetails = errorBody.error;
+        } else if (typeof errorBody === 'string') {
+          errorDetails = errorBody;
+        }
+      }
+      if (error.response.status) {
+        statusCode = error.response.status;
+      }
+    }
+    
+    // Check for 404 specifically
+    if (statusCode === 404 || errorMessage.includes('404') || errorMessage.includes('Not Found')) {
+      errorDetails = `Product with ID "${productId}" not found in Shopify store. Please verify the product ID exists and is active in your Shopify admin.`;
+    }
+    
     return {
       success: false,
-      error: error.message
+      error: `Received an error response (${statusCode} ${statusCode === 404 ? 'Not Found' : ''}) from Shopify:\n"${errorDetails}"`
     };
   }
 }
@@ -119,8 +157,11 @@ async function getVariant(variantId) {
   try {
     const client = createShopifyClient();
     
+    // Convert variantId to string if it's a number (Shopify API expects string)
+    const variantIdStr = String(variantId);
+    
     const response = await client.get({
-      path: `variants/${variantId}`
+      path: `variants/${variantIdStr}`
     });
 
     return {
@@ -130,9 +171,44 @@ async function getVariant(variantId) {
 
   } catch (error) {
     console.error('Error fetching variant:', error);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      status: error.status,
+      statusCode: error.statusCode,
+      response: error.response
+    });
+    
+    // Extract more detailed error information
+    let errorMessage = error.message || 'Unknown error';
+    let errorDetails = errorMessage;
+    let statusCode = error.code || error.status || error.statusCode || 'Unknown';
+    
+    // Check if error has response body with more details
+    if (error.response) {
+      if (error.response.body) {
+        const errorBody = error.response.body;
+        if (errorBody.errors) {
+          errorDetails = JSON.stringify(errorBody.errors);
+        } else if (errorBody.error) {
+          errorDetails = errorBody.error;
+        } else if (typeof errorBody === 'string') {
+          errorDetails = errorBody;
+        }
+      }
+      if (error.response.status) {
+        statusCode = error.response.status;
+      }
+    }
+    
+    // Check for 404 specifically
+    if (statusCode === 404 || errorMessage.includes('404') || errorMessage.includes('Not Found')) {
+      errorDetails = `Variant with ID "${variantId}" not found in Shopify store. Please verify the variant ID exists and is active in your Shopify admin.`;
+    }
+    
     return {
       success: false,
-      error: error.message
+      error: `Received an error response (${statusCode} ${statusCode === 404 ? 'Not Found' : ''}) from Shopify:\n"${errorDetails}"`
     };
   }
 }
