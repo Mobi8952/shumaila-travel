@@ -63,6 +63,42 @@ async function createTables() {
   `;
 
   await pool.execute(createBookingOrdersTable);
+
+  // Create products table for managing product dates and seats
+  const createProductsTable = `
+    CREATE TABLE IF NOT EXISTS products (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      product_id BIGINT NOT NULL UNIQUE,
+      variant_id BIGINT NOT NULL,
+      product_name VARCHAR(255) NOT NULL,
+      variant_name VARCHAR(255),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_product_id (product_id)
+    )
+  `;
+
+  await pool.execute(createProductsTable);
+
+  // Create product_dates table for managing dates and available seats
+  const createProductDatesTable = `
+    CREATE TABLE IF NOT EXISTS product_dates (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      product_id BIGINT NOT NULL,
+      date DATE NOT NULL,
+      available_seats INT DEFAULT 0,
+      booked_seats INT DEFAULT 0,
+      is_active BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_product_date (product_id, date),
+      INDEX idx_product_id (product_id),
+      INDEX idx_date (date),
+      INDEX idx_is_active (is_active)
+    )
+  `;
+
+  await pool.execute(createProductDatesTable);
 }
 
 // Test database connection

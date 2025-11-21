@@ -18,6 +18,15 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Routes
 app.use('/api/booking', bookingRoutes);
 app.use('/api/orders', ordersRoutes);
+app.use('/api/admin', require('./routes/admin'));
+
+// Serve static files for admin panel
+app.use(express.static('public'));
+
+// Admin panel route
+app.get('/admin', (req, res) => {
+  res.sendFile(__dirname + '/public/admin.html');
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {

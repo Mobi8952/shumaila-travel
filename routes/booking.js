@@ -17,9 +17,9 @@ const validateBookingData = (req, res, next) => {
 
   // Check required fields
   if (!booking_dates || !first_name || !last_name || !phone_number || !email || !product_id || !variant_id) {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required fieldsssss',
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields',
       required_fields: [
         'booking_dates', 
         'first_name', 
@@ -88,6 +88,25 @@ router.post('/create', validateBookingData, async (req, res) => {
       }
     } else {
       console.log('⚠️  Shopify not configured - creating booking without checkout');
+    }
+
+    // Auto-create product if it doesn't exist
+    try {
+      const productQuery = `
+        INSERT INTO products (product_id, variant_id, product_name, variant_name)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          variant_id = VALUES(variant_id),
+          updated_at = CURRENT_TIMESTAMP
+      `;
+      await pool.execute(productQuery, [
+        product_id,
+        variant_id,
+        `Product ${product_id}`,
+        `Variant ${variant_id}`
+      ]);
+    } catch (error) {
+      console.warn('Could not auto-create product:', error.message);
     }
 
     // Store booking data in database
